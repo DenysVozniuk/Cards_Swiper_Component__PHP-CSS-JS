@@ -1,0 +1,68 @@
+/* 
+    Перед підключенням цього файлу CSS обов'язково підключити CSS файл Swiper:
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.css"/>
+*/
+
+.cards-swiper {
+    position: relative;
+}
+
+.cards-swiper__wrapper {
+    overflow: hidden;
+    position: relative;
+}
+
+.cards-swiper__navigation {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transform: translateY(-50%);
+    z-index: 2;
+    pointer-events: none;
+}
+
+.cards-swiper__btn {
+    width: 48px;
+    height: 48px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 50%;
+    border: 0;
+    background: #F3F3F3;
+    transition: background 0.3s, opacity 0.3s, visibility 0.3s;
+    pointer-events: auto;
+}
+
+.cards-swiper__btn:hover {
+    background: #dfdede;
+}
+
+.cards-swiper__btn:active {
+    background: #b9b9b9;
+}
+
+.cards-swiper__btn.is-hidden {
+    opacity: 0;
+    visibility: hidden;
+}
+
+.cards-swiper__btn svg {
+    width: 20px;
+    height: 20px;
+}
+
+.cards-swiper--no-arrows .cards-swiper__navigation {
+    display: none;
+}
+
+.cards-swiper .cards-swiper__pagination {
+    position: relative;
+    z-index: 2;
+    margin-top: 12px;
+    text-align: center;
+}
