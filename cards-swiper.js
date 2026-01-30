@@ -8,7 +8,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const clamp = (n, min, max) => Math.min(Math.max(n, min), max);
 
-    // Беремо meta config для поточного min-width breakpoint
     function resolveMeta(config, currentBreakpoint) {
         const base = {
             show_arrows: config.showArrows ?? true,
@@ -19,6 +18,11 @@ document.addEventListener('DOMContentLoaded', () => {
             grabCursor: config.grabCursor ?? true,
             watchOverflow: config.watchOverflow ?? true,
             pagination: config.pagination ?? false,
+
+            centeredSlides: config.centeredSlides ?? false,
+            centeredSlidesBounds: config.centeredSlidesBounds ?? false,
+
+            touchRatio: (typeof config.touchRatio === 'number' ? config.touchRatio : 1),
         };
 
         const meta = config.metaBreakpoints || {};
@@ -54,17 +58,30 @@ document.addEventListener('DOMContentLoaded', () => {
         let lastApplied = {
             loop: null,
             pagination: null,
+            centeredSlides: null,
+            centeredSlidesBounds: null,
+            touchRatio: null,
         };
+
+        function goToIndex(index, speed = 0) {
+            if (!swiper) return;
+
+            const max = Math.max((config.cardsCount ?? 1) - 1, 0);
+            const target = clamp(Math.abs(index), 0, max);
+
+            if (swiper.params && swiper.params.loop) {
+                swiper.slideToLoop(target, speed);
+            } else {
+                swiper.slideTo(target, speed);
+            }
+        }
 
         function syncEdges() {
             if (!swiper) return;
 
             const isLoop = !!swiper.params.loop;
-
-            // watchOverflow => swiper.isLocked (fallback на allowSlide*)
             const isLocked = !!swiper.isLocked || (!swiper.allowSlideNext && !swiper.allowSlidePrev);
 
-            // Класи початок/кінець мають сенс лише без loop і без lock
             if (!isLoop && !isLocked) {
                 block.classList.toggle('is-beginning', swiper.isBeginning);
                 block.classList.toggle('is-end', swiper.isEnd);
@@ -72,7 +89,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 block.classList.remove('is-beginning', 'is-end');
             }
 
-            // Якщо лочиться — прибираємо навігацію/пагінацію (бо “гортати нема куди”)
             if (isLocked) {
                 if (navWrap) navWrap.style.display = 'none';
                 if (hasNavDom) {
@@ -84,7 +100,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (pagEl) pagEl.style.display = 'none';
                 return;
             } else {
-                // Якщо розлочилось — повертаємо (але meta може ховати стрілки окремо)
                 if (pagEl) pagEl.style.display = '';
             }
 
@@ -106,7 +121,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function applyMeta(meta) {
-            // show_arrows
             const showArrows = meta.show_arrows !== false;
             if (navWrap) {
                 navWrap.style.display = showArrows ? '' : 'none';
@@ -115,15 +129,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 btnNext.hidden = !showArrows;
             }
 
-            // start_position (manual)
-            if (typeof meta.start_position === 'number' && Number.isFinite(meta.start_position) && swiper) {
-                const max = Math.max((config.cardsCount ?? 1) - 1, 0);
-                const target = clamp(Math.abs(meta.start_position), 0, max);
-                swiper.slideTo(target, 0);
+            if (typeof meta.start_position === 'number' && Number.isFinite(meta.start_position)) {
+                goToIndex(meta.start_position, 0);
             }
         }
 
         function buildSwiperOptions(meta) {
+            const tr = (typeof meta.touchRatio === 'number' && Number.isFinite(meta.touchRatio))
+                ? Math.max(0, Math.min(meta.touchRatio, 10))
+                : 1;
+
             const options = {
                 slidesPerView: config.slidesPerView ?? 3,
                 spaceBetween: config.spaceBetween ?? 12,
@@ -134,6 +149,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 loop: !!meta.loop,
                 grabCursor: meta.grabCursor !== false,
                 watchOverflow: meta.watchOverflow !== false,
+
+                centeredSlides: !!meta.centeredSlides,
+                centeredSlidesBounds: !!meta.centeredSlidesBounds,
+
+                touchRatio: tr,
             };
 
             if (hasNavDom) {
@@ -144,7 +164,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 };
             }
 
-            // pagination: вмикаємо тільки якщо DOM є і meta.pagination=true
             if (hasPagDom && meta.pagination) {
                 options.pagination = {
                     el: pagEl,
@@ -166,7 +185,6 @@ document.addEventListener('DOMContentLoaded', () => {
             swiper.on('resize', handleRecalc);
             swiper.on('lock', syncEdges);
             swiper.on('unlock', syncEdges);
-
 
             syncEdges();
         }
@@ -192,29 +210,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const nextLoop = !!meta.loop;
             const nextPagination = !!meta.pagination;
+            const nextCentered = !!meta.centeredSlides;
+            const nextCenteredBounds = !!meta.centeredSlidesBounds;
+
+            const nextTouchRatio = (typeof meta.touchRatio === 'number' && Number.isFinite(meta.touchRatio))
+                ? Math.max(0, Math.min(meta.touchRatio, 10))
+                : 1;
 
             const needReinit =
                 lastApplied.loop !== nextLoop ||
-                lastApplied.pagination !== nextPagination;
+                lastApplied.pagination !== nextPagination ||
+                lastApplied.centeredSlides !== nextCentered ||
+                lastApplied.centeredSlidesBounds !== nextCenteredBounds ||
+                lastApplied.touchRatio !== nextTouchRatio;
 
             if (needReinit) {
-                // пам'ятаємо поточний індекс, щоб не "стрибало"
-                const activeIndex = swiper.activeIndex ?? 0;
+                const keepIndex = (swiper.params && swiper.params.loop)
+                    ? (swiper.realIndex ?? 0)
+                    : (swiper.activeIndex ?? 0);
 
                 destroySwiper();
 
-                // після destroy створюємо з новими meta, і повертаємось на активний слайд
                 createSwiper(meta);
-                if (swiper) swiper.slideTo(activeIndex, 0);
-
+                goToIndex(keepIndex, 0);
             } else {
-                // без re-init: просто застосовуємо meta-опції (start_position/show_arrows)
                 applyMeta(meta);
                 syncEdges();
             }
 
             lastApplied.loop = nextLoop;
             lastApplied.pagination = nextPagination;
+            lastApplied.centeredSlides = nextCentered;
+            lastApplied.centeredSlidesBounds = nextCenteredBounds;
+            lastApplied.touchRatio = nextTouchRatio;
         }
 
         // INIT
@@ -222,15 +250,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         lastApplied.loop = !!initialMeta.loop;
         lastApplied.pagination = !!initialMeta.pagination;
+        lastApplied.centeredSlides = !!initialMeta.centeredSlides;
+        lastApplied.centeredSlidesBounds = !!initialMeta.centeredSlidesBounds;
+
+        lastApplied.touchRatio = (typeof initialMeta.touchRatio === 'number' && Number.isFinite(initialMeta.touchRatio))
+            ? Math.max(0, Math.min(initialMeta.touchRatio, 10))
+            : 1;
 
         createSwiper(initialMeta);
 
-        // первинні ручні застосування (бо currentBreakpoint може бути null одразу)
         applyMeta(initialMeta);
         syncEdges();
 
-        // одразу прогнати recalc після ініту, щоб підтягнути meta під реальний breakpoint
-        // (Swiper інколи проставляє currentBreakpoint трохи пізніше)
         setTimeout(handleRecalc, 0);
     });
 });

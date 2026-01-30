@@ -13,31 +13,32 @@ declare(strict_types=1);
  *   loop?: bool,
  *   grabCursor?: bool,
  *   watchOverflow?: bool,
- *   pagination?: bool
+ *   pagination?: bool,
+ *   centeredSlides?: bool,
+ *   centeredSlidesBounds?: bool,
+ *   touchRatio?: float|int
  * }
  *
  * @phpstan-type CardsSwiperBreakpoints array<string|int, CardsSwiperBreakpointConfig>
  *
  * @phpstan-type CardsSwiperArgs array{
- *   // REQUIRED
- *   root_class: string,
+ *   root_classes: string,
  *   cards: array<int, mixed>,
  *   card_body: callable(mixed): void,
- *
- *   // OPTIONAL (base)
  *   cards_per_page?: float|int,
  *   gap?: string,
  *   start_position?: int,
  *   show_arrows?: bool,
  *   breakpoints?: CardsSwiperBreakpoints|null,
  *   arrows_template?: callable(): void|null,
- *
- *   // OPTIONAL (Swiper)
  *   speed?: int,
  *   loop?: bool,
  *   grabCursor?: bool,
  *   watchOverflow?: bool,
- *   pagination?: bool
+ *   pagination?: bool,
+ *   centeredSlides?: bool,
+ *   centeredSlidesBounds?: bool,
+ *   touchRatio?: float|int
  * }
  */
 
@@ -45,10 +46,10 @@ declare(strict_types=1);
 function cards_swiper(array $args): void
 {
     // -----------------------
-    // 1) Defaults + required
+    // Defaults + required
     // -----------------------
     $defaults = [
-        'root_class'      => '',
+        'root_classes'      => '',
         'cards'           => [],
         'card_body'       => null,
 
@@ -65,28 +66,31 @@ function cards_swiper(array $args): void
         'grabCursor'      => true,
         'watchOverflow'   => true,
         'pagination'      => false,
+
+        'centeredSlides'       => false,
+        'centeredSlidesBounds' => false,
+
+        'touchRatio'      => 0.5,
     ];
 
     $a = array_merge($defaults, $args);
 
     // required validation
-    if (!is_string($a['root_class'])) $a['root_class'] = (string)$a['root_class'];
+    if (!is_string($a['root_classes'])) $a['root_classes'] = (string)$a['root_classes'];
     if (!is_array($a['cards'])) $a['cards'] = [];
     if (!isset($a['card_body']) || !is_callable($a['card_body'])) {
         return;
     }
 
-    $root_class = $a['root_class'];
+    $root_classes = $a['root_classes'];
     $cards      = $a['cards'];
 
     /** @var callable(mixed):void $card_body */
     $card_body  = $a['card_body'];
 
     // -----------------------
-    // 2) Helpers
+    // Helpers
     // -----------------------
-    $cardsCount = count($cards);
-
     $gap_to_px = static function (string $value): float {
         if (preg_match('/-?\d+(\.\d+)?/', $value, $m)) {
             return (float)$m[0];
@@ -109,7 +113,7 @@ function cards_swiper(array $args): void
     };
 
     // -----------------------
-    // 3) Base values normalize
+    // Base values normalize
     // -----------------------
     $cards_per_page = round($to_float($a['cards_per_page'], 3.0), 1);
     $gap            = (string)$a['gap'];
@@ -124,17 +128,64 @@ function cards_swiper(array $args): void
     $watchOverflow  = $to_bool($a['watchOverflow']);
     $pagination     = $to_bool($a['pagination']);
 
-    $breakpoints    = is_array($a['breakpoints']) ? $a['breakpoints'] : null;
+    $centeredSlides       = $to_bool($a['centeredSlides']);
+    $centeredSlidesBounds = $to_bool($a['centeredSlidesBounds']);
+
+    $touchRatio = $to_float($a['touchRatio'], 1.0);
+    if (!is_finite($touchRatio)) $touchRatio = 1.0;
+    $touchRatio = max(0.0, min($touchRatio, 10.0));
+
+    $breakpoints     = is_array($a['breakpoints']) ? $a['breakpoints'] : null;
     $arrows_template = is_callable($a['arrows_template']) ? $a['arrows_template'] : null;
 
-    // base start_position -> initialSlide (кламп)
+    // Враховуємо: loop може стати true на певному breakpoint, тому дивимось base + breakpoints.
+    // Беремо MAX ceil(cards_per_page) серед тих режимів, де loop=true.
+    // -----------------------
+    $cardsCount = count($cards);
+
+    $loopMayBeTrue = $loop;
+    $maxLoopCeil = (int)ceil($cards_per_page);
+
+    if (is_array($breakpoints)) {
+        foreach ($breakpoints as $k => $cfg) {
+            if (!is_array($cfg)) continue;
+            if (!array_key_exists('loop', $cfg)) continue;
+
+            $bpLoop = $to_bool($cfg['loop']);
+            if (!$bpLoop) continue;
+
+            $loopMayBeTrue = true;
+
+            $bpCpp = $cards_per_page;
+            if (array_key_exists('cards_per_page', $cfg) && is_numeric($cfg['cards_per_page'])) {
+                $bpCpp = (float)$cfg['cards_per_page'];
+            }
+
+            $maxLoopCeil = max($maxLoopCeil, (int)ceil($bpCpp));
+        }
+    }
+
+    if ($loopMayBeTrue && $cardsCount > 0) {
+        $minNeeded = ($maxLoopCeil * 2) + 4;
+
+        $temp_cards = $cards;
+
+        if ($cardsCount < $minNeeded) {
+            // дублюємо "пачками" (всі елементи) доки не досягнемо minNeeded
+            while (count($cards) < $minNeeded) {
+                $cards = array_merge($cards, $temp_cards);
+            }
+
+            $cardsCount = count($cards);
+        }
+        unset($temp_cards);
+    }
+
+    // base start_position -> initialSlide (кламп) (після можливого дублювання cards)
     $initialSlide = min(max(abs($start_position), 0), max($cardsCount - 1, 0));
 
     // -----------------------
-    // 4) Normalize breakpoints (max-width keys)
-    //    Allow override for:
-    //    cards_per_page, gap, show_arrows, start_position,
-    //    speed, loop, grabCursor, watchOverflow, pagination
+    // Normalize breakpoints (max-width keys)
     // -----------------------
     $normalized = [];
     if ($breakpoints) {
@@ -172,12 +223,25 @@ function cards_swiper(array $args): void
                 $out['pagination'] = $to_bool($cfg['pagination']);
             }
 
+            if (array_key_exists('centeredSlides', $cfg)) {
+                $out['centeredSlides'] = $to_bool($cfg['centeredSlides']);
+            }
+            if (array_key_exists('centeredSlidesBounds', $cfg)) {
+                $out['centeredSlidesBounds'] = $to_bool($cfg['centeredSlidesBounds']);
+            }
+
+            if (array_key_exists('touchRatio', $cfg)) {
+                $tr = $to_float($cfg['touchRatio'], $touchRatio);
+                if (!is_finite($tr)) $tr = $touchRatio;
+                $out['touchRatio'] = max(0.0, min($tr, 10.0));
+            }
+
             $normalized[(int)$k] = $out; // max-width
         }
     }
 
     // -----------------------
-    // 5) Convert max-width -> min-width maps
+    // Convert max-width -> min-width maps
     // -----------------------
     $swiperBreakpoints = [];
     $metaBreakpoints = [];
@@ -195,16 +259,32 @@ function cards_swiper(array $args): void
                 'spaceBetween'  => $space,
             ];
 
-            // Swiper-friendly
             if (array_key_exists('speed', $cfg)) $bpSwiper['speed'] = (int)$cfg['speed'];
             if (array_key_exists('grabCursor', $cfg)) $bpSwiper['grabCursor'] = (bool)$cfg['grabCursor'];
             if (array_key_exists('watchOverflow', $cfg)) $bpSwiper['watchOverflow'] = (bool)$cfg['watchOverflow'];
 
+            if (array_key_exists('centeredSlides', $cfg)) $bpSwiper['centeredSlides'] = (bool)$cfg['centeredSlides'];
+            if (array_key_exists('centeredSlidesBounds', $cfg)) $bpSwiper['centeredSlidesBounds'] = (bool)$cfg['centeredSlidesBounds'];
+
+            if (array_key_exists('touchRatio', $cfg)) $bpSwiper['touchRatio'] = (float)$cfg['touchRatio'];
+
             $swiperBreakpoints[$minWidth] = $bpSwiper;
 
-            // Meta (manual / re-init triggers)
             $meta = [];
-            foreach (['show_arrows', 'start_position', 'loop', 'pagination', 'speed', 'grabCursor', 'watchOverflow'] as $k) {
+            foreach (
+                [
+                    'show_arrows',
+                    'start_position',
+                    'loop',
+                    'pagination',
+                    'speed',
+                    'grabCursor',
+                    'watchOverflow',
+                    'centeredSlides',
+                    'centeredSlidesBounds',
+                    'touchRatio',
+                ] as $k
+            ) {
                 if (array_key_exists($k, $cfg)) {
                     $meta[$k] = $cfg[$k];
                 }
@@ -214,28 +294,33 @@ function cards_swiper(array $args): void
             $minWidth = (int)$maxWidth + 1;
         }
 
-        // default for > last maxWidth
         $swiperBreakpoints[$minWidth] = [
-            'slidesPerView' => $cards_per_page,
-            'spaceBetween'  => $spaceBetween,
-            'speed'         => $speed,
-            'grabCursor'    => $grabCursor,
-            'watchOverflow' => $watchOverflow,
+            'slidesPerView'         => $cards_per_page,
+            'spaceBetween'          => $spaceBetween,
+            'speed'                 => $speed,
+            'grabCursor'            => $grabCursor,
+            'watchOverflow'         => $watchOverflow,
+            'centeredSlides'        => $centeredSlides,
+            'centeredSlidesBounds'  => $centeredSlidesBounds,
+            'touchRatio'            => $touchRatio,
         ];
     } else {
         $swiperBreakpoints = [
             0 => [
-                'slidesPerView' => $cards_per_page,
-                'spaceBetween'  => $spaceBetween,
-                'speed'         => $speed,
-                'grabCursor'    => $grabCursor,
-                'watchOverflow' => $watchOverflow,
+                'slidesPerView'         => $cards_per_page,
+                'spaceBetween'          => $spaceBetween,
+                'speed'                 => $speed,
+                'grabCursor'            => $grabCursor,
+                'watchOverflow'         => $watchOverflow,
+                'centeredSlides'        => $centeredSlides,
+                'centeredSlidesBounds'  => $centeredSlidesBounds,
+                'touchRatio'            => $touchRatio,
             ],
         ];
     }
 
     // -----------------------
-    // 6) Determine if we must render arrows/pagination in DOM at all
+    // Determine if we must render arrows/pagination in DOM at all
     // -----------------------
     $renderArrows = $show_arrows;
     $renderPagination = $pagination;
@@ -252,7 +337,7 @@ function cards_swiper(array $args): void
     }
 
     // -----------------------
-    // 7) Build config JSON
+    // Build config JSON
     // -----------------------
     $oldSerializePrecision = ini_get('serialize_precision');
     $oldPrecision = ini_get('precision');
@@ -260,7 +345,6 @@ function cards_swiper(array $args): void
     ini_set('precision', '14');
 
     $config = [
-        // base
         'slidesPerView'    => $cards_per_page,
         'spaceBetween'     => $spaceBetween,
         'initialSlide'     => $initialSlide,
@@ -273,11 +357,14 @@ function cards_swiper(array $args): void
         'pagination'       => $pagination,
         'showArrows'       => $show_arrows,
 
-        // bps
+        'centeredSlides'       => $centeredSlides,
+        'centeredSlidesBounds' => $centeredSlidesBounds,
+
+        'touchRatio'       => $touchRatio,
+
         'breakpoints'      => $swiperBreakpoints,
         'metaBreakpoints'  => $metaBreakpoints,
 
-        // dom flags
         'hasNavigationDom' => $renderArrows,
         'hasPaginationDom' => $renderPagination,
     ];
@@ -287,7 +374,7 @@ function cards_swiper(array $args): void
     ini_set('serialize_precision', (string)$oldSerializePrecision);
     ini_set('precision', (string)$oldPrecision);
 
-    $id = 'cards_swiper_' . substr(md5($root_class . '|' . $cardsCount . '|' . microtime(true)), 0, 8);
+    $id = 'cards_swiper_' . substr(md5($root_classes . '|' . $cardsCount . '|' . microtime(true)), 0, 8);
 
     $default_arrows = static function (): void { ?>
         <div class="cards-swiper__navigation" data-swiper-navigation>
@@ -307,7 +394,7 @@ function cards_swiper(array $args): void
 
     ?>
     <div
-        class="<?= htmlspecialchars($root_class) ?> cards-swiper<?= $loop === true ? " is-loop" : "" ?> is-beginning"
+        class="<?= htmlspecialchars($root_classes) ?> cards-swiper<?= $loop === true ? " is-loop" : "" ?> is-beginning"
         id="<?= $id ?>"
         data-swiper-config='<?= htmlspecialchars($configJson, ENT_QUOTES) ?>'>
         <div class="cards-swiper__wrapper">
@@ -338,6 +425,7 @@ function cards_swiper(array $args): void
     </div>
 <?php
 }
+
 
 /* 
 ПРИКЛАД ВИКОРИСТАННЯ
@@ -371,13 +459,15 @@ $cards = [
 
 cards_swiper([
     // REQUIRED
-    'root_class' => 'cards',
-    'cards' => $cards,
-    'card_body' => function ($card): void { ?>
+    'root_classes' => 'cards',
+    'cards'        => $cards,
+    'card_body'    => function ($card): void { ?>
         <div class="card">
             <div class="card__img-wrapper">
-                <img src="<?= htmlspecialchars((string)$card['img_src']) ?>"
-                    alt="<?= htmlspecialchars((string)$card['alt']) ?>">
+                <img
+                    src="<?= htmlspecialchars((string)$card['img_src']) ?>"
+                    alt="<?= htmlspecialchars((string)$card['alt']) ?>"
+                >
             </div>
 
             <a class="link" href="<?= htmlspecialchars((string)$card['link']) ?>">
@@ -387,57 +477,68 @@ cards_swiper([
     <?php },
 
     // OPTIONAL (base)
-    'cards_per_page' => 3.6,
-    'gap' => '12px',
-    'start_position' => 0,
-    'show_arrows' => true,
-
-    // OPTIONAL (Swiper base)
-    'speed' => 450,
-    'loop' => false,
-    'grabCursor' => true,
-    'watchOverflow' => true,
-    'pagination' => true,
-
-    // OPTIONAL: кастомні стрілки (важливо: data-swiper-prev / data-swiper-next)
-    'arrows_template' => function (): void { ?>
+    'cards_per_page'        => 3.6,
+    'gap'                   => '12px',
+    'start_position'        => 0,
+    'show_arrows'           => true,
+    'arrows_template'       => function (): void { ?>
         <div class="my-nav" data-swiper-navigation>
             <button type="button" data-swiper-prev aria-label="Previous">◀</button>
             <button type="button" data-swiper-next aria-label="Next">▶</button>
         </div>
     <?php },
 
-    // OPTIONAL: max-width breakpoints (як у твоїй логіці)
+    // OPTIONAL (Swiper base)
+    'speed'                 => 450,
+    'loop'                  => false,
+    'grabCursor'            => true,
+    'watchOverflow'         => true,
+    'pagination'            => true,
+    'centeredSlides'        => false,
+    'centeredSlidesBounds'  => false,
+    'touchRatio'            => 0.5,
+
+    // OPTIONAL: max-width breakpoints
     'breakpoints' => [
         // <= 1024
         '1024' => [
-            'cards_per_page' => 2.6,
-            'gap' => '12px',
-            'speed' => 400,
-            'loop' => false,
-            'grabCursor' => true,
-            'watchOverflow' => true,
-            'pagination' => true,
-            'show_arrows' => true,
-            'start_position' => 0,
+            'cards_per_page'        => 2.6,
+            'gap'                   => '12px',
+            'start_position'        => 0,
+            'show_arrows'           => true,
+
+            'speed'                 => 400,
+            'loop'                  => false,
+            'grabCursor'            => true,
+            'watchOverflow'         => true,
+            'pagination'            => true,
+
+            'centeredSlides'        => false,
+            'centeredSlidesBounds'  => false,
+
+            'touchRatio'            => 0.6,
         ],
 
         // <= 850
         '850' => [
-            'cards_per_page' => 1.4,
-            'gap' => '10px',
-            'speed' => 350,
+            'cards_per_page'        => 1.4,
+            'gap'                   => '10px',
+            'start_position'        => 1,
+            'show_arrows'           => true,
 
-            // приклад: на мобільному вмикаємо loop, вимикаємо пагінацію,
-            // і ховаємо стрілки (але якщо в тебе JS зроблений так,
-            // що при loop стрілки не ховаються — show_arrows можна лишити true)
-            'loop' => true,
-            'pagination' => false,
-            'show_arrows' => true,
+            'speed'                 => 350,
+            'loop'                  => true,   // на мобільному вмикаємо loop
+            'grabCursor'            => true,
+            'watchOverflow'         => true,
+            'pagination'            => false,  // наприклад вимикаємо пагінацію
 
-            // наприклад стартуємо з 1-го слайда
-            'start_position' => 1,
+            // центруємо активний слайд на мобільному
+            'centeredSlides'        => true,
+            'centeredSlidesBounds'  => true,
+
+            'touchRatio'            => 0.8,
         ],
     ],
 ]);
+
 */
