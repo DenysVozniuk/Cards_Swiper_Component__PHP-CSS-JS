@@ -1,1 +1,17 @@
-"# Cards_Swiper_Component__PHP-CSS-JS" 
+# Cards Swiper Component (PHP + CSS + JS)
+
+Компонент-обгортка над **Swiper.js**, який дозволяє швидко рендерити "картки" (будь-який HTML) у вигляді слайдера з:
+- серверним (PHP) формуванням HTML + конфігу,
+- клієнтською (JS) ініціалізацією Swiper,
+- адаптивними брейкпоінтами у форматі **max-width** (з автоматичною конвертацією в **min-width**, як очікує Swiper),
+- коректним перемиканням режимів **loop / pagination / centeredSlides / touchRatio** на брейкпоінтах (з реініціалізацією Swiper лише коли це потрібно),
+- опціональними кастомними стрілками.
+
+---
+
+## Структура
+
+- `cards-swiper.php` — PHP-функція `cards_swiper(array $args): void` (рендер HTML та конфігу).
+- `cards-swiper.js` — ініціалізація Swiper для всіх `.cards-swiper` на сторінці.
+- `cards-swiper.css` — базові стилі для навігації та пагінації.
+
