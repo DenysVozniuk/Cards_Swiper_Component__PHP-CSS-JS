@@ -1,8 +1,3 @@
-/* 
-    Перед підключенням цього файлу JS обов'язково підключити JS файл Swiper:
-    <script src="https://cdn.jsdelivr.net/npm/swiper@12/swiper-bundle.min.js"></script>
-*/
-
 document.addEventListener('DOMContentLoaded', () => {
     const swiperBlocks = document.querySelectorAll('.cards-swiper');
 
@@ -55,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const hasPagDom = !!config.hasPaginationDom && !!pagEl;
 
         let swiper = null;
+
         let lastApplied = {
             loop: null,
             pagination: null,
@@ -62,6 +58,15 @@ document.addEventListener('DOMContentLoaded', () => {
             centeredSlidesBounds: null,
             touchRatio: null,
         };
+
+        let reinitScheduled = false;
+        let pendingMeta = null;
+        let pendingKeepIndex = 0;
+
+        function normalizeTouchRatio(v) {
+            const tr = (typeof v === 'number' && Number.isFinite(v)) ? v : 1;
+            return Math.max(0, Math.min(tr, 10));
+        }
 
         function goToIndex(index, speed = 0) {
             if (!swiper) return;
@@ -80,6 +85,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!swiper) return;
 
             const isLoop = !!swiper.params.loop;
+
             const isLocked = !!swiper.isLocked || (!swiper.allowSlideNext && !swiper.allowSlidePrev);
 
             if (!isLoop && !isLocked) {
@@ -135,9 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function buildSwiperOptions(meta) {
-            const tr = (typeof meta.touchRatio === 'number' && Number.isFinite(meta.touchRatio))
-                ? Math.max(0, Math.min(meta.touchRatio, 10))
-                : 1;
+            const tr = normalizeTouchRatio(meta.touchRatio);
 
             const options = {
                 slidesPerView: config.slidesPerView ?? 3,
@@ -174,32 +178,89 @@ document.addEventListener('DOMContentLoaded', () => {
             return options;
         }
 
-        function createSwiper(meta) {
-            const opts = buildSwiperOptions(meta);
-            swiper = new Swiper(swiperEl, opts);
-
+        function bindSwiperEvents() {
+            if (!swiper) return;
             swiper.on('slideChange', syncEdges);
             swiper.on('reachEnd', syncEdges);
             swiper.on('reachBeginning', syncEdges);
+
             swiper.on('breakpoint', handleRecalc);
-            swiper.on('resize', handleRecalc);
+
             swiper.on('lock', syncEdges);
             swiper.on('unlock', syncEdges);
+        }
+
+        function unbindSwiperEvents(instance) {
+            if (!instance) return;
+            instance.off('slideChange', syncEdges);
+            instance.off('reachEnd', syncEdges);
+            instance.off('reachBeginning', syncEdges);
+            instance.off('breakpoint', handleRecalc);
+            instance.off('lock', syncEdges);
+            instance.off('unlock', syncEdges);
+        }
+
+        function createSwiper(meta) {
+            const opts = buildSwiperOptions(meta);
+            swiper = new Swiper(swiperEl, opts);
+            bindSwiperEvents();
+
+            if (swiper.params.loop) {
+                swiper.update();
+                const ri = swiper.realIndex ?? (config.initialSlide ?? 0);
+                swiper.slideToLoop(ri, 0);
+            }
 
             syncEdges();
         }
 
-        function destroySwiper() {
+        function destroySwiperSafe() {
             if (!swiper) return;
-            swiper.off('slideChange', syncEdges);
-            swiper.off('reachEnd', syncEdges);
-            swiper.off('reachBeginning', syncEdges);
-            swiper.off('breakpoint', handleRecalc);
-            swiper.off('resize', handleRecalc);
-            swiper.off('lock', syncEdges);
-            swiper.off('unlock', syncEdges);
-            swiper.destroy(true, true);
+            const old = swiper;
             swiper = null;
+
+            unbindSwiperEvents(old);
+
+            old.destroy(false, true);
+        }
+
+        function scheduleReinit(meta) {
+            if (!swiper) return;
+
+            const keepIndex = (swiper.params && swiper.params.loop)
+                ? (swiper.realIndex ?? 0)
+                : (swiper.activeIndex ?? 0);
+
+            pendingMeta = meta;
+            pendingKeepIndex = keepIndex;
+
+            if (reinitScheduled) return;
+            reinitScheduled = true;
+
+            requestAnimationFrame(() => {
+                reinitScheduled = false;
+
+                if (!block.isConnected) return;
+
+                if (!swiper) {
+                    createSwiper(pendingMeta || meta);
+                    goToIndex(pendingKeepIndex, 0);
+                    applyMeta(pendingMeta || meta);
+                    syncEdges();
+                    pendingMeta = null;
+                    return;
+                }
+
+                destroySwiperSafe();
+
+                createSwiper(pendingMeta || meta);
+
+                goToIndex(pendingKeepIndex, 0);
+                applyMeta(pendingMeta || meta);
+                syncEdges();
+
+                pendingMeta = null;
+            });
         }
 
         function handleRecalc() {
@@ -212,10 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const nextPagination = !!meta.pagination;
             const nextCentered = !!meta.centeredSlides;
             const nextCenteredBounds = !!meta.centeredSlidesBounds;
-
-            const nextTouchRatio = (typeof meta.touchRatio === 'number' && Number.isFinite(meta.touchRatio))
-                ? Math.max(0, Math.min(meta.touchRatio, 10))
-                : 1;
+            const nextTouchRatio = normalizeTouchRatio(meta.touchRatio);
 
             const needReinit =
                 lastApplied.loop !== nextLoop ||
@@ -225,14 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 lastApplied.touchRatio !== nextTouchRatio;
 
             if (needReinit) {
-                const keepIndex = (swiper.params && swiper.params.loop)
-                    ? (swiper.realIndex ?? 0)
-                    : (swiper.activeIndex ?? 0);
-
-                destroySwiper();
-
-                createSwiper(meta);
-                goToIndex(keepIndex, 0);
+                scheduleReinit(meta);
             } else {
                 applyMeta(meta);
                 syncEdges();
@@ -245,22 +296,26 @@ document.addEventListener('DOMContentLoaded', () => {
             lastApplied.touchRatio = nextTouchRatio;
         }
 
-        // INIT
         const initialMeta = resolveMeta(config, null);
 
         lastApplied.loop = !!initialMeta.loop;
         lastApplied.pagination = !!initialMeta.pagination;
         lastApplied.centeredSlides = !!initialMeta.centeredSlides;
         lastApplied.centeredSlidesBounds = !!initialMeta.centeredSlidesBounds;
-
-        lastApplied.touchRatio = (typeof initialMeta.touchRatio === 'number' && Number.isFinite(initialMeta.touchRatio))
-            ? Math.max(0, Math.min(initialMeta.touchRatio, 10))
-            : 1;
+        lastApplied.touchRatio = normalizeTouchRatio(initialMeta.touchRatio);
 
         createSwiper(initialMeta);
-
         applyMeta(initialMeta);
         syncEdges();
+
+        let resizeT = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeT);
+            resizeT = setTimeout(() => {
+                if (!swiper) return;
+                handleRecalc();
+            }, 80);
+        });
 
         setTimeout(handleRecalc, 0);
     });
